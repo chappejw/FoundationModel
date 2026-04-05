@@ -49,14 +49,15 @@ struct CalculatorTool: Tool {
         @Guide(description: "Second number in the calculation")
         var b: Double
 
-        @Guide(.anyOf(["add", "subtract", "multiply", "divide"]),
-               description: "The operation to perform")
+        @Guide(description: "The operation to perform", .anyOf(["add", "subtract", "multiply", "divide"]))
         var operation: String
     }
 
     /// The `call` method is invoked by the framework when the model decides to use this tool.
-    /// It receives the model-generated arguments and returns a `ToolOutput`.
-    func call(arguments: Arguments) async throws -> ToolOutput {
+    /// It receives the model-generated arguments and returns a `String`.
+    /// The Tool protocol's Output associated type must conform to `PromptRepresentable`.
+    /// String, @Generable types, and other SDK primitives all qualify.
+    func call(arguments: Arguments) async throws -> String {
         let result: Double = switch arguments.operation {
         case "add": arguments.a + arguments.b
         case "subtract": arguments.a - arguments.b
@@ -64,7 +65,7 @@ struct CalculatorTool: Tool {
         case "divide": arguments.b != 0 ? arguments.a / arguments.b : .nan
         default: .nan
         }
-        return ToolOutput("\(result)")
+        return "\(result)"
     }
 }
 
@@ -80,7 +81,7 @@ struct WeatherTool: Tool {
         var city: String
     }
 
-    func call(arguments: Arguments) async throws -> ToolOutput {
+    func call(arguments: Arguments) async throws -> String {
         // In a real app, you'd call a weather API here.
         // This mock demonstrates the pattern.
         let mockWeather = [
@@ -90,7 +91,7 @@ struct WeatherTool: Tool {
             "London": "55F, Rainy",
         ]
         let weather = mockWeather[arguments.city] ?? "70F, Clear skies"
-        return ToolOutput("Current weather in \(arguments.city): \(weather)")
+        return "Current weather in \(arguments.city): \(weather)"
     }
 }
 
@@ -207,7 +208,8 @@ struct ToolCallingView: View {
             // After generation, you can inspect `session.transcript` to see what tools
             // were called, with what arguments, and what they returned.
             // This is useful for debugging and for showing users what happened behind the scenes.
-            for entry in session.transcript.entries {
+            // Transcript conforms to RandomAccessCollection<Entry> -- iterate directly.
+            for entry in session.transcript {
                 if case .toolCalls(let calls) = entry {
                     for call in calls {
                         toolCallLog.append("Called: \(call.toolName)")

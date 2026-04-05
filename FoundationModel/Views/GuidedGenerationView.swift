@@ -41,7 +41,7 @@ struct QuizQuestion {
     @Guide(description: "The quiz question text")
     var question: String
 
-    @Guide(.count(4), description: "Exactly four multiple-choice options")
+    @Guide(description: "Exactly four multiple-choice options", .count(4))
     var choices: [String]
 
     @Guide(description: "The correct answer, must match one of the choices")
@@ -69,13 +69,13 @@ struct Recipe {
     @Guide(description: "A one-sentence description of the dish")
     var summary: String
 
-    @Guide(.range(1...180), description: "Prep time in minutes")
+    @Guide(description: "Prep time in minutes", .range(1...180))
     var prepTimeMinutes: Int
 
-    @Guide(.minimumCount(2), .maximumCount(10), description: "List of ingredients")
+    @Guide(description: "List of ingredients", .minimumCount(2), .maximumCount(10))
     var ingredients: [String]
 
-    @Guide(.minimumCount(2), .maximumCount(8), description: "Step-by-step instructions")
+    @Guide(description: "Step-by-step instructions", .minimumCount(2), .maximumCount(8))
     var steps: [String]
 }
 

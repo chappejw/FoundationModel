@@ -150,7 +150,7 @@ struct GenerationOptionsView: View {
                 )
 
                 // Prewarm for faster first response
-                try await session.prewarm()
+                session.prewarm()
                 """)
                 .font(.system(.caption, design: .monospaced))
                 .padding(.vertical, 4)
@@ -185,7 +185,7 @@ struct GenerationOptionsView: View {
             // Calling prewarm() loads the model into memory ahead of time.
             // This eliminates the "cold start" delay on the first generation call.
             // Great to call during app launch or when navigating to an AI-powered screen.
-            try await session.prewarm()
+            session.prewarm()
 
             let result = try await session.respond(to: prompt, options: options)
             response = result.content
