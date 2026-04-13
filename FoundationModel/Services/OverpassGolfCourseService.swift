@@ -42,7 +42,7 @@ struct OverpassGolfCourseService {
 
     func downloadCourses(for country: GolfDatasetCountry) async throws -> [DownloadedGolfCourse] {
         let query = """
-        [out:json][timeout:1800];
+        [out:json][timeout:300];
         area["ISO3166-1"="\(country.isoCode)"]["admin_level"="2"]->.searchArea;
         (
           node["golf"="course"](area.searchArea);

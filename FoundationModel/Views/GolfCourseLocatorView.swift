@@ -123,13 +123,25 @@ struct GolfCourseLocatorView: View {
                     }
                 }
                 .buttonStyle(.plain)
+                .onAppear {
+                    guard course.sourceID == filteredCourses.last?.sourceID else { return }
+                    Task { await viewModel.loadNextPage(using: modelContext) }
+                }
             }
             .listStyle(.plain)
+
+            if viewModel.canLoadMore {
+                ProgressView("Loading more courses...")
+                    .padding(.bottom, 8)
+            }
         }
         .navigationTitle("Golf Course Locator")
         .task {
             await viewModel.loadFromCacheOrDownload(using: modelContext)
             updateMapForCurrentSelection()
+        }
+        .onChange(of: viewModel.selectedCountry) { _, _ in
+            Task { await viewModel.loadFromCacheOrDownload(using: modelContext) }
         }
         .onChange(of: filteredCourses.count) { _, _ in
             updateMapForCurrentSelection()
@@ -168,12 +180,16 @@ final class GolfCourseLocatorViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var statusMessage: String?
     @Published var errorMessage: String?
+    @Published var canLoadMore = false
 
-    private let cacheLifetime: TimeInterval = 60 * 60 * 24 * 30
+    private let cacheLifetimeDays = 30
+    private var cacheLifetime: TimeInterval { TimeInterval(cacheLifetimeDays * 24 * 60 * 60) }
+    private let pageSize = 1_000
+    private var currentOffset = 0
     private let downloader = OverpassGolfCourseService()
 
     func loadFromCacheOrDownload(using context: ModelContext) async {
-        await loadCachedCourses(using: context)
+        await resetAndLoadFirstPage(using: context)
 
         guard let lastSync = lastSyncDate(for: selectedCountry, in: context) else {
             await downloadAndCache(using: context)
@@ -187,14 +203,33 @@ final class GolfCourseLocatorViewModel: ObservableObject {
         }
     }
 
+    func resetAndLoadFirstPage(using context: ModelContext) async {
+        currentOffset = 0
+        allCourses = []
+        selectedCourse = nil
+        canLoadMore = true
+        await loadNextPage(using: context)
+    }
+
     func loadCachedCourses(using context: ModelContext) async {
+        await resetAndLoadFirstPage(using: context)
+    }
+
+    func loadNextPage(using context: ModelContext) async {
+        guard canLoadMore || currentOffset == 0 else { return }
+
         isLoading = true
         defer { isLoading = false }
 
         do {
             var descriptor = FetchDescriptor<GolfCourse>(sortBy: [SortDescriptor(\GolfCourse.name)])
-            descriptor.fetchLimit = 50_000
-            allCourses = try context.fetch(descriptor)
+            descriptor.fetchOffset = currentOffset
+            descriptor.fetchLimit = pageSize
+
+            let nextPage = try context.fetch(descriptor)
+            allCourses.append(contentsOf: nextPage)
+            currentOffset += nextPage.count
+            canLoadMore = nextPage.count == pageSize
 
             if selectedCourse == nil {
                 selectedCourse = allCourses.first
@@ -216,7 +251,7 @@ final class GolfCourseLocatorViewModel: ObservableObject {
             let downloadedCourses = try await downloader.downloadCourses(for: selectedCountry)
             try merge(downloadedCourses: downloadedCourses, into: context)
             statusMessage = "Downloaded and cached \(downloadedCourses.count) golf courses for \(selectedCountry.rawValue)."
-            await loadCachedCourses(using: context)
+            await resetAndLoadFirstPage(using: context)
         } catch {
             errorMessage = error.localizedDescription
         }
