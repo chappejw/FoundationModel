@@ -127,6 +127,22 @@ struct ContentView: View {
                             Image(systemName: "slider.horizontal.3")
                         }
                     }
+
+
+                    NavigationLink {
+                        GolfCourseLocatorView()
+                    } label: {
+                        Label {
+                            VStack(alignment: .leading) {
+                                Text("Golf Course Locator")
+                                Text("Map + list, filters, and cached OpenStreetMap data")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        } icon: {
+                            Image(systemName: "map")
+                        }
+                    }
                 }
 
                 // MARK: - Resources
