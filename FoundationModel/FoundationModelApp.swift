@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftData
 
 /// FoundationModel Demo App
 ///
@@ -29,5 +30,6 @@ struct FoundationModelApp: App {
         WindowGroup {
             ContentView()
         }
+        .modelContainer(for: [GolfCourse.self, GolfCourseSyncState.self])
     }
 }
