@@ -183,7 +183,8 @@ final class GolfCourseLocatorViewModel: ObservableObject {
     @Published var canLoadMore = false
 
     private let cacheLifetimeDays = 30
-    private var cacheLifetime: TimeInterval { TimeInterval(cacheLifetimeDays * 24 * 60 * 60) }
+    private let secondsPerDay: TimeInterval = 86_400
+    private var cacheLifetime: TimeInterval { TimeInterval(cacheLifetimeDays) * secondsPerDay }
     private let pageSize = 1_000
     private var currentOffset = 0
     private let downloader = OverpassGolfCourseService()
@@ -265,7 +266,12 @@ final class GolfCourseLocatorViewModel: ObservableObject {
             predicate: #Predicate { $0.countryCode == countryCode }
         )
         let existingCourses = try context.fetch(existingDescriptor)
-        var existingByID: [String: GolfCourse] = Dictionary(uniqueKeysWithValues: existingCourses.map { ($0.sourceID, $0) })
+        var existingByID: [String: GolfCourse] = [:]
+        for course in existingCourses {
+            if existingByID[course.sourceID] == nil {
+                existingByID[course.sourceID] = course
+            }
+        }
 
         for downloaded in downloadedCourses {
             if let existing = existingByID[downloaded.sourceID] {
