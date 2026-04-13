@@ -217,7 +217,7 @@ final class GolfCourseLocatorViewModel: ObservableObject {
     }
 
     func loadNextPage(using context: ModelContext) async {
-        guard canLoadMore || currentOffset == 0 else { return }
+        guard currentOffset == 0 || canLoadMore else { return }
 
         isLoading = true
         defer { isLoading = false }
@@ -268,9 +268,7 @@ final class GolfCourseLocatorViewModel: ObservableObject {
         let existingCourses = try context.fetch(existingDescriptor)
         var existingByID: [String: GolfCourse] = [:]
         for course in existingCourses {
-            if existingByID[course.sourceID] == nil {
-                existingByID[course.sourceID] = course
-            }
+            existingByID[course.sourceID] = course
         }
 
         for downloaded in downloadedCourses {
