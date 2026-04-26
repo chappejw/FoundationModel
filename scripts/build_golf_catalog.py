@@ -1,214 +1,254 @@
 #!/usr/bin/env python3
-"""Build the bundled golf course catalog from open data sources.
+"""Build compact ODRSF-only resources for the golf map demo.
 
-The output schema matches FoundationModel/Resources/golf_courses.json.
+Inputs:
+- FoundationModel/ODRSF_V1.0/ODRSF_v1.0.csv
 
-Data sources:
-- OpenGolfAPI US GeoJSON: https://github.com/opengolfapi/data (ODbL 1.0)
-- OpenStreetMap / Overpass Canada extraction: leisure=golf_course (ODbL 1.0)
+Outputs:
+- FoundationModel/Resources/odrsf_golf_courses.json
+- FoundationModel/Resources/odrsf_facilities.json
 """
 
 from __future__ import annotations
 
 import argparse
-import gzip
+import csv
 import json
-import urllib.parse
-import urllib.request
+import math
+import re
 from pathlib import Path
 
 
-OPEN_GOLF_US_GEOJSON = (
-    "https://raw.githubusercontent.com/opengolfapi/data/main/opengolfapi-us.geojson.gz"
+ODRSF_CSV = Path("FoundationModel/ODRSF_V1.0/ODRSF_v1.0.csv")
+DEFAULT_COURSES_OUTPUT = Path("FoundationModel/Resources/odrsf_golf_courses.json")
+DEFAULT_FACILITIES_OUTPUT = Path("FoundationModel/Resources/odrsf_facilities.json")
+
+COUNTRY = "CA"
+VALID_LAT_RANGE = (41.0, 84.0)
+VALID_LON_RANGE = (-142.0, -52.0)
+GOLF_TERMS = ("golf", "driving range")
+NEARBY_AMENITY_RADIUS_MILES = 2.0
+SOURCE_ATTRIBUTION = (
+    "Contains information from the Open Database of Recreational and Sport Facilities "
+    "(ODRSF) v1.0, Statistics Canada and contributing open data providers."
 )
-OVERPASS_URL = "https://overpass-api.de/api/interpreter"
-CANADA_GOLF_QUERY = """
-[out:json][timeout:180];
-area["ISO3166-1"="CA"][admin_level=2]->.canada;
-(
-  node["leisure"="golf_course"](area.canada);
-  way["leisure"="golf_course"](area.canada);
-  relation["leisure"="golf_course"](area.canada);
-);
-out center tags;
-"""
 
 
-def read_url(url: str) -> bytes:
-    with urllib.request.urlopen(url, timeout=240) as response:
-        return response.read()
+def clean(value: str | None) -> str:
+    text = (value or "").strip()
+    if not text or text in {"..", "_", "-"}:
+        return ""
+    return re.sub(r"\s+", " ", text)
 
 
-def coordinate_from_geometry(geometry: dict) -> tuple[float, float] | None:
-    if geometry.get("type") == "Point":
-        lon, lat = geometry["coordinates"]
-        return float(lat), float(lon)
-    if geometry.get("type") == "Polygon":
-        ring = geometry["coordinates"][0]
-        if not ring:
-            return None
-        lon = sum(point[0] for point in ring) / len(ring)
-        lat = sum(point[1] for point in ring) / len(ring)
-        return float(lat), float(lon)
-    if geometry.get("type") == "MultiPolygon":
-        rings = [ring for polygon in geometry["coordinates"] for ring in polygon if ring]
-        points = [point for ring in rings for point in ring]
-        if not points:
-            return None
-        lon = sum(point[0] for point in points) / len(points)
-        lat = sum(point[1] for point in points) / len(points)
-        return float(lat), float(lon)
+def title_case(value: str) -> str:
+    if not value:
+        return ""
+    return value.title().replace("'S", "'s")
+
+
+def slug(value: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", "-", value.lower())
+    return normalized.strip("-") or "facility"
+
+
+def valid_coordinate(row: dict[str, str]) -> tuple[float, float] | None:
+    try:
+        lat = float(row["Latitude"])
+        lon = float(row["Longitude"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+    if VALID_LAT_RANGE[0] <= lat <= VALID_LAT_RANGE[1] and VALID_LON_RANGE[0] <= lon <= VALID_LON_RANGE[1]:
+        return lat, lon
     return None
 
 
-def boundary_from_geometry(geometry: dict) -> list[dict] | None:
-    if geometry.get("type") != "Polygon":
-        return None
-    ring = geometry["coordinates"][0][:80]
-    return [{"latitude": float(lat), "longitude": float(lon)} for lon, lat in ring]
+def normalized_name(row: dict[str, str]) -> str:
+    name = clean(row.get("Facility_Name"))
+    if name:
+        return title_case(name)
+
+    facility_type = title_case(clean(row.get("ODRSF_facility_type")) or "Facility")
+    place = title_case(clean(row.get("CSD_Name")) or clean(row.get("City")) or clean(row.get("Prov_Terr")) or "Canada")
+    return f"{facility_type} in {place}"
 
 
-def normalize_open_golf_course(feature: dict) -> dict | None:
-    props = feature.get("properties", {})
-    geometry = feature.get("geometry", {})
-    coordinate = coordinate_from_geometry(geometry)
-    if coordinate is None:
-        return None
+def normalized_location(row: dict[str, str]) -> tuple[str, str, str]:
+    municipality = title_case(clean(row.get("CSD_Name")) or clean(row.get("City")))
+    province = clean(row.get("Prov_Terr")).upper()
+    address = clean(row.get("Source_Format_Address"))
+    return municipality, province, address
 
-    lat, lon = coordinate
-    course_id = str(props.get("id") or props.get("course_id") or props.get("name"))
-    name = props.get("name") or props.get("course_name")
-    if not course_id or not name:
-        return None
+
+def is_golf_facility(row: dict[str, str]) -> bool:
+    haystack = " ".join(
+        clean(row.get(field)).lower()
+        for field in ("Facility_Name", "Source_Facility_Type", "ODRSF_facility_type")
+    )
+    return any(term in haystack for term in GOLF_TERMS)
+
+
+def facility_record(row: dict[str, str], lat: float, lon: float) -> dict:
+    municipality, province, address = normalized_location(row)
+    facility_type = clean(row.get("ODRSF_facility_type")) or "miscellaneous"
+    provider = title_case(clean(row.get("Provider")) or "ODRSF")
+    source_index = clean(row.get("Index"))
+    source_type = clean(row.get("Source_Facility_Type"))
+    name = normalized_name(row)
 
     return {
-        "id": f"opengolf-us-{course_id}",
+        "id": f"odrsf-{source_index or slug(f'{name}-{lat:.6f}-{lon:.6f}')}",
         "name": name,
-        "country": "US",
-        "region": props.get("state") or props.get("region") or "",
-        "city": props.get("city") or "",
-        "address": props.get("address") or "",
-        "latitude": lat,
-        "longitude": lon,
-        "boundary": boundary_from_geometry(geometry),
-        "holes": [],
-        "attribution": "Contains data from OpenGolfAPI (opengolfapi.org), ODbL 1.0.",
+        "facilityType": facility_type,
+        "sourceFacilityType": source_type,
+        "provider": provider,
+        "municipality": municipality,
+        "province": province,
+        "country": COUNTRY,
+        "address": title_case(address),
+        "latitude": round(lat, 7),
+        "longitude": round(lon, 7),
+        "sourceIndex": source_index,
+        "isGolfFacility": is_golf_facility(row),
     }
 
 
-def normalize_osm_course(element: dict) -> dict | None:
-    tags = element.get("tags", {})
-    name = tags.get("name")
-    if not name:
-        return None
-
-    center = element.get("center")
-    if center:
-        lat, lon = float(center["lat"]), float(center["lon"])
-    elif "lat" in element and "lon" in element:
-        lat, lon = float(element["lat"]), float(element["lon"])
-    else:
-        geometry = element.get("geometry") or []
-        if not geometry:
-            return None
-        lat = sum(point["lat"] for point in geometry) / len(geometry)
-        lon = sum(point["lon"] for point in geometry) / len(geometry)
-
-    street = " ".join(
-        part
-        for part in [tags.get("addr:housenumber", ""), tags.get("addr:street", "")]
-        if part
-    )
-    address = ", ".join(
-        part
-        for part in [street, tags.get("addr:city", ""), tags.get("addr:province", "")]
-        if part
-    )
-    boundary = None
-    if element.get("geometry"):
-        boundary = [
-            {"latitude": float(point["lat"]), "longitude": float(point["lon"])}
-            for point in element["geometry"][:80]
-        ]
-
+def course_record(row: dict[str, str], lat: float, lon: float) -> dict:
+    facility = facility_record(row, lat, lon)
     return {
-        "id": f"osm-ca-{element['type']}-{element['id']}",
-        "name": name,
-        "country": "CA",
-        "region": tags.get("addr:province") or tags.get("addr:state") or "",
-        "city": tags.get("addr:city") or "",
-        "address": address,
-        "latitude": lat,
-        "longitude": lon,
-        "boundary": boundary,
+        "id": facility["id"],
+        "name": facility["name"],
+        "country": COUNTRY,
+        "region": facility["province"],
+        "city": facility["municipality"],
+        "address": facility["address"],
+        "latitude": facility["latitude"],
+        "longitude": facility["longitude"],
+        "boundary": None,
         "holes": [],
-        "attribution": "Contains information from OpenStreetMap, ODbL 1.0.",
+        "facilityType": facility["facilityType"],
+        "sourceFacilityType": facility["sourceFacilityType"],
+        "provider": facility["provider"],
+        "sourceIndex": facility["sourceIndex"],
+        "attribution": SOURCE_ATTRIBUTION,
     }
 
 
-def load_us_courses(limit: int | None) -> list[dict]:
-    raw = gzip.decompress(read_url(OPEN_GOLF_US_GEOJSON))
-    data = json.loads(raw)
-    courses = []
-    for feature in data.get("features", []):
-        course = normalize_open_golf_course(feature)
-        if course:
-            courses.append(course)
-        if limit and len(courses) >= limit:
-            break
-    return courses
-
-
-def load_canada_courses(limit: int | None) -> list[dict]:
-    body = urllib.parse.urlencode({"data": CANADA_GOLF_QUERY}).encode()
-    request = urllib.request.Request(
-        OVERPASS_URL,
-        data=body,
-        headers={
-            "Content-Type": "application/x-www-form-urlencoded",
-            "User-Agent": "FoundationModelGolfDemo/1.0",
-        },
+def dedupe_key(record: dict) -> tuple:
+    return (
+        record["name"].lower(),
+        record.get("facilityType", "").lower(),
+        record.get("municipality", record.get("city", "")).lower(),
+        record.get("province", record.get("region", "")).lower(),
+        round(float(record["latitude"]), 5),
+        round(float(record["longitude"]), 5),
     )
-    with urllib.request.urlopen(request, timeout=240) as response:
-        data = json.loads(response.read())
-    courses = []
-    for element in data.get("elements", []):
-        course = normalize_osm_course(element)
-        if course:
-            courses.append(course)
-        if limit and len(courses) >= limit:
-            break
-    return courses
+
+
+def unique_records(records: list[dict]) -> list[dict]:
+    unique: dict[tuple, dict] = {}
+    for record in records:
+        key = dedupe_key(record)
+        existing = unique.get(key)
+        if existing is None:
+            unique[key] = record
+            continue
+
+        if not existing.get("address") and record.get("address"):
+            unique[key] = record
+    return list(unique.values())
+
+
+def distance_miles(lhs: dict, rhs: dict) -> float:
+    radius = 3_958.8
+    lhs_lat = math.radians(lhs["latitude"])
+    rhs_lat = math.radians(rhs["latitude"])
+    delta_lat = math.radians(rhs["latitude"] - lhs["latitude"])
+    delta_lon = math.radians(rhs["longitude"] - lhs["longitude"])
+    a = math.sin(delta_lat / 2) ** 2 + math.cos(lhs_lat) * math.cos(rhs_lat) * math.sin(delta_lon / 2) ** 2
+    return radius * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def facilities_near_courses(facilities: list[dict], courses: list[dict]) -> list[dict]:
+    cell_size = 0.1
+    grid: dict[tuple[int, int], list[int]] = {}
+    for index, facility in enumerate(facilities):
+        key = (int(facility["latitude"] / cell_size), int(facility["longitude"] / cell_size))
+        grid.setdefault(key, []).append(index)
+
+    kept_indexes: set[int] = set()
+    cell_radius = 2
+    for course in courses:
+        course_key = (int(course["latitude"] / cell_size), int(course["longitude"] / cell_size))
+        for lat_offset in range(-cell_radius, cell_radius + 1):
+            for lon_offset in range(-cell_radius, cell_radius + 1):
+                for index in grid.get((course_key[0] + lat_offset, course_key[1] + lon_offset), []):
+                    if distance_miles(course, facilities[index]) <= NEARBY_AMENITY_RADIUS_MILES:
+                        kept_indexes.add(index)
+
+    return [facilities[index] for index in sorted(kept_indexes)]
+
+
+def load_odrsf(path: Path) -> tuple[list[dict], list[dict]]:
+    facilities: list[dict] = []
+    courses: list[dict] = []
+
+    with path.open(newline="", encoding="latin-1") as handle:
+        for row in csv.DictReader(handle):
+            coordinate = valid_coordinate(row)
+            if coordinate is None:
+                continue
+
+            lat, lon = coordinate
+            facilities.append(facility_record(row, lat, lon))
+            if is_golf_facility(row):
+                courses.append(course_record(row, lat, lon))
+
+    return unique_records(courses), unique_records(facilities)
+
+
+def write_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--output", default="FoundationModel/Resources/golf_courses.json")
-    parser.add_argument("--limit-us", type=int, default=None)
-    parser.add_argument("--limit-ca", type=int, default=None)
-    parser.add_argument("--skip-us", action="store_true")
-    parser.add_argument("--skip-ca", action="store_true")
+    parser.add_argument("--input", type=Path, default=ODRSF_CSV)
+    parser.add_argument("--courses-output", type=Path, default=DEFAULT_COURSES_OUTPUT)
+    parser.add_argument("--facilities-output", type=Path, default=DEFAULT_FACILITIES_OUTPUT)
     args = parser.parse_args()
 
-    courses: list[dict] = []
-    if not args.skip_us:
-        courses.extend(load_us_courses(args.limit_us))
-    if not args.skip_ca:
-        courses.extend(load_canada_courses(args.limit_ca))
+    courses, facilities = load_odrsf(args.input)
+    facilities = facilities_near_courses(facilities, courses)
 
-    catalog = {
-        "schemaVersion": 1,
-        "attribution": [
-            "Contains data from OpenGolfAPI (opengolfapi.org), ODbL 1.0.",
-            "Contains information from OpenStreetMap, ODbL 1.0.",
-        ],
-        "courses": courses,
-    }
+    write_json(
+        args.courses_output,
+        {
+            "schemaVersion": 2,
+            "source": "ODRSF v1.0",
+            "nearbyRadiusMiles": NEARBY_AMENITY_RADIUS_MILES,
+            "attribution": [SOURCE_ATTRIBUTION],
+            "courses": sorted(courses, key=lambda item: (item["region"], item["city"], item["name"])),
+        },
+    )
+    write_json(
+        args.facilities_output,
+        {
+            "schemaVersion": 1,
+            "source": "ODRSF v1.0",
+            "nearbyRadiusMiles": NEARBY_AMENITY_RADIUS_MILES,
+            "attribution": [SOURCE_ATTRIBUTION],
+            "facilities": sorted(
+                facilities,
+                key=lambda item: (item["province"], item["municipality"], item["facilityType"], item["name"]),
+            ),
+        },
+    )
 
-    output = Path(args.output)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(catalog, indent=2, sort_keys=True) + "\n")
-    print(f"Wrote {len(courses)} courses to {output}")
+    print(f"Wrote {len(courses)} ODRSF golf courses to {args.courses_output}")
+    print(f"Wrote {len(facilities)} ODRSF facilities to {args.facilities_output}")
 
 
 if __name__ == "__main__":

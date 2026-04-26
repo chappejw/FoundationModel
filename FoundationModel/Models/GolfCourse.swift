@@ -1,11 +1,20 @@
 import CoreLocation
 import Foundation
 import MapKit
+import SwiftUI
 
 struct GolfCatalogEnvelope: Decodable {
     let schemaVersion: Int
+    let source: String?
     let attribution: [String]
     let courses: [GolfCourse]
+}
+
+struct ODRSFFacilityCatalogEnvelope: Decodable {
+    let schemaVersion: Int
+    let source: String?
+    let attribution: [String]
+    let facilities: [ODRSFFacility]
 }
 
 struct GolfCoordinate: Codable, Hashable, Sendable {
@@ -38,6 +47,10 @@ struct GolfCourse: Codable, Hashable, Identifiable, Sendable {
     let longitude: Double
     let boundary: [GolfCoordinate]?
     let holes: [GolfHole]
+    let facilityType: String?
+    let sourceFacilityType: String?
+    let provider: String?
+    let sourceIndex: String?
     let attribution: String
 
     var coordinate: CLLocationCoordinate2D {
@@ -50,6 +63,10 @@ struct GolfCourse: Codable, Hashable, Identifiable, Sendable {
 
     var displayLocation: String {
         [city, region, country].filter { !$0.isEmpty }.joined(separator: ", ")
+    }
+
+    var displayType: String {
+        (sourceFacilityType?.isEmpty == false ? sourceFacilityType : facilityType) ?? "golf facility"
     }
 
     func hole(number: Int) -> GolfHole {
@@ -101,9 +118,150 @@ struct GolfCourse: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
+struct ODRSFFacility: Codable, Hashable, Identifiable, Sendable {
+    let id: String
+    let name: String
+    let facilityType: String
+    let sourceFacilityType: String
+    let provider: String
+    let municipality: String
+    let province: String
+    let country: String
+    let address: String
+    let latitude: Double
+    let longitude: Double
+    let sourceIndex: String
+    let isGolfFacility: Bool
+
+    var coordinate: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+    }
+
+    var location: CLLocation {
+        CLLocation(latitude: latitude, longitude: longitude)
+    }
+
+    var displayLocation: String {
+        [municipality, province, country].filter { !$0.isEmpty }.joined(separator: ", ")
+    }
+
+    var displayType: String {
+        ODRSFFacilityType(rawValue: facilityType)?.title ?? facilityType.capitalized
+    }
+
+    func distanceMiles(from location: CLLocation?) -> Double? {
+        guard let location else { return nil }
+        return self.location.distance(from: location) / 1_609.344
+    }
+}
+
+enum ODRSFFacilityType: String, CaseIterable, Identifiable, Codable, Sendable {
+    case trail
+    case park
+    case sportsField = "sports field"
+    case playground
+    case pool
+    case communityCentre = "community centre"
+    case rink
+    case splashPad = "splash pad"
+    case arena
+    case miscellaneous
+    case gym
+    case beach
+    case skatePark = "skate park"
+    case raceTrack = "race track"
+    case marina
+    case athleticPark = "athletic park"
+    case stadium
+    case casino
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .trail: "Trails"
+        case .park: "Parks"
+        case .sportsField: "Sports Fields"
+        case .playground: "Playgrounds"
+        case .pool: "Pools"
+        case .communityCentre: "Community"
+        case .rink: "Rinks"
+        case .splashPad: "Splash Pads"
+        case .arena: "Arenas"
+        case .miscellaneous: "Other"
+        case .gym: "Gyms"
+        case .beach: "Beaches"
+        case .skatePark: "Skate Parks"
+        case .raceTrack: "Race Tracks"
+        case .marina: "Marinas"
+        case .athleticPark: "Athletic Parks"
+        case .stadium: "Stadiums"
+        case .casino: "Casinos"
+        }
+    }
+
+    var singularTitle: String {
+        switch self {
+        case .communityCentre: "Community Centre"
+        case .sportsField: "Sports Field"
+        case .splashPad: "Splash Pad"
+        case .skatePark: "Skate Park"
+        case .raceTrack: "Race Track"
+        case .athleticPark: "Athletic Park"
+        default: title.trimmingCharacters(in: CharacterSet(charactersIn: "s"))
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .trail: "figure.hiking"
+        case .park: "tree"
+        case .sportsField: "sportscourt"
+        case .playground: "figure.play"
+        case .pool: "figure.pool.swim"
+        case .communityCentre: "building.2"
+        case .rink: "snowflake"
+        case .splashPad: "drop"
+        case .arena: "building.columns"
+        case .miscellaneous: "mappin"
+        case .gym: "dumbbell"
+        case .beach: "beach.umbrella"
+        case .skatePark: "figure.skating"
+        case .raceTrack: "flag.2.crossed"
+        case .marina: "sailboat"
+        case .athleticPark: "figure.run"
+        case .stadium: "sportscourt.fill"
+        case .casino: "suit.club"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .trail: .mint
+        case .park: .green
+        case .sportsField: .blue
+        case .playground: .orange
+        case .pool: .cyan
+        case .communityCentre: .indigo
+        case .rink: .teal
+        case .splashPad: .blue
+        case .arena: .purple
+        case .miscellaneous: .gray
+        case .gym: .red
+        case .beach: .yellow
+        case .skatePark: .pink
+        case .raceTrack: .brown
+        case .marina: .cyan
+        case .athleticPark: .orange
+        case .stadium: .purple
+        case .casino: .red
+        }
+    }
+}
+
 enum GolfCourseCatalog {
     static func load() -> GolfCatalogEnvelope {
-        guard let url = Bundle.main.url(forResource: "golf_courses", withExtension: "json") else {
+        guard let url = Bundle.main.url(forResource: "odrsf_golf_courses", withExtension: "json") else {
             return fallback
         }
 
@@ -116,23 +274,50 @@ enum GolfCourseCatalog {
     }
 
     private static let fallback = GolfCatalogEnvelope(
-        schemaVersion: 1,
-        attribution: ["Fallback demo data generated locally."],
+        schemaVersion: 2,
+        source: "Fallback",
+        attribution: ["ODRSF resource unavailable. Fallback point generated locally."],
         courses: [
             GolfCourse(
-                id: "fallback-course",
-                name: "Demo Links",
-                country: "US",
-                region: "CA",
-                city: "Pebble Beach",
-                address: "Demo coordinate",
-                latitude: 36.5686,
-                longitude: -121.9505,
+                id: "fallback-odrsf-course",
+                name: "ODRSF Golf Facility",
+                country: "CA",
+                region: "BC",
+                city: "Vancouver",
+                address: "Fallback coordinate",
+                latitude: 49.2247921,
+                longitude: -123.0503412,
                 boundary: nil,
                 holes: [],
+                facilityType: "sports field",
+                sourceFacilityType: "golf course",
+                provider: "Fallback",
+                sourceIndex: "",
                 attribution: "Fallback demo data."
             )
         ]
+    )
+}
+
+enum ODRSFFacilityCatalog {
+    static func load() -> ODRSFFacilityCatalogEnvelope {
+        guard let url = Bundle.main.url(forResource: "odrsf_facilities", withExtension: "json") else {
+            return fallback
+        }
+
+        do {
+            let data = try Data(contentsOf: url)
+            return try JSONDecoder().decode(ODRSFFacilityCatalogEnvelope.self, from: data)
+        } catch {
+            return fallback
+        }
+    }
+
+    private static let fallback = ODRSFFacilityCatalogEnvelope(
+        schemaVersion: 1,
+        source: "Fallback",
+        attribution: ["ODRSF facility resource unavailable."],
+        facilities: []
     )
 }
 
