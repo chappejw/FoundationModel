@@ -16,18 +16,18 @@ Apple's framework that gives developers direct access to the **on-device 3-billi
 | **Multi-Turn Chat** | Stateful conversations using the session transcript |
 | **Guided Generation** | Typed, structured output with `@Generable` and `@Guide` macros |
 | **Tool Calling** | Let the model call your app's functions via the `Tool` protocol |
-| **Golf Course Map** | AI-generated MapKit carousel for course maps, current-hole previews, location, and weather |
+| **Golf Course Map** | ODRSF-only MapKit course carousel with AI-ranked nearby amenities, map styles, location, and weather |
 | **Generation Options** | Temperature, sampling modes, token limits, and prewarming |
 
-## Golf Course Data
+## ODRSF Golf Course Data
 
-The Golf Course Map demo ships with a small bundled JSON catalog so the app runs offline. To rebuild that catalog from open data, run:
+The Golf Course Map demo ships with compact JSON resources generated from the local Open Database of Recreational and Sport Facilities (ODRSF) v1.0 CSV. To rebuild those resources, run:
 
 ```bash
-python3 scripts/build_golf_catalog.py --output FoundationModel/Resources/golf_courses.json
+python3 scripts/build_golf_catalog.py
 ```
 
-The import pipeline normalizes OpenGolfAPI US data and OpenStreetMap Canada `leisure=golf_course` data into the same schema. Both sources require ODbL attribution and share-alike handling for derived databases.
+The import pipeline filters ODRSF golf-like facilities into `odrsf_golf_courses.json` and normalizes all ODRSF facility types within the nearby-course radius into `odrsf_facilities.json` for amenity ranking. ODRSF provides facility points and categories, so the app clearly treats hole previews as generated map context rather than surveyed course geometry.
 
 ## Requirements
 

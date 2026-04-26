@@ -119,7 +119,7 @@ struct ContentView: View {
                         Label {
                             VStack(alignment: .leading) {
                                 Text("Golf Course Map")
-                                Text("AI-generated MapKit course carousel")
+                                Text("ODRSF courses with AI-ranked nearby amenities")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
