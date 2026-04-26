@@ -114,6 +114,21 @@ struct ContentView: View {
                     }
 
                     NavigationLink {
+                        GolfCourseMapDemoView()
+                    } label: {
+                        Label {
+                            VStack(alignment: .leading) {
+                                Text("Golf Course Map")
+                                Text("AI-generated MapKit course carousel")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        } icon: {
+                            Image(systemName: "map")
+                        }
+                    }
+
+                    NavigationLink {
                         GenerationOptionsView()
                     } label: {
                         Label {
